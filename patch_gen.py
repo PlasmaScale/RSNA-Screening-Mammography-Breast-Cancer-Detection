@@ -126,7 +126,7 @@ class PatchGenerator():
                 # If the minimum ratio is below the threshold, return None
                 if min_ratio <= 0.1:
                     print(f"No abnormality patch can be generated for image: {path}")
-                    return None
+                    return min_ratio/0.25
                 # Reset the trial count
                 trials = 0
                 
@@ -162,7 +162,7 @@ class PatchGenerator():
         
         patch_type = self._determine_mass_type(patch_mask)
         
-        self._save_patch(img_patch, patch_type, patch_num, path)
+        self._save_patch(patch_img, patch_type, patch_num, path)
         return min_ratio
     
     def _determine_mass_type(self, patch_mask):
