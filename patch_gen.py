@@ -16,22 +16,35 @@ class PatchGenerator():
     
     def __init__(self, imgs_path: str, patch_size: tuple=(256,256), 
                  max_patches: int=40, min_ratio: float=0.01, 
-                 max_black_space: float=0.5, max_trials: int=100, dir_name: str=None):
+                 max_black_space: float=0.5, max_trials: int=50, dir_name: str=None):
+        """
+        Constructor to initialize class instance variables.
+
+        :param imgs_path: Path to the directory containing images.
+        :param patch_size: Size of the patches to be generated.
+        :param max_patches: Maximum number of patches to generate from each image.
+        :param min_ratio: Minimum ratio of abnormal tissue to image size in the patches.
+        :param max_black_space: Maximum black space in the patches.
+        :param max_trials: Maximum trials to generate patches from one image.
+        :param dir_name: Name of the directory to save generated patches.
+        """
         
         self.patch_size = patch_size
         self.max_patches = max_patches
         self.min_ratio = min_ratio
-        self.imgs_path = glob.glob(f"{imgs_path}/**/*mammo.jpg", recursive=True)
+        self.imgs_path = glob.glob(f"{imgs_path}/**/*mammo.png", recursive=True)
         self.max_trials = max_trials
         self.max_black_space = max_black_space
         
+        # Set default directory name or use provided name
         if dir_name is None:
             dir_name = f"ratio{self.min_ratio}_patches{self.max_patches}_{self.patch_size[0]}x"
         os.makedirs(dir_name, exist_ok=True)
         self.save_path = os.path.join(os.getcwd(), dir_name)
     
-    def generate_all(self, n_jobs: int=4):
+    def generate_all(self, n_jobs: int=-1):
         
+        # Use parallel processing to generate patches
         Parallel(n_jobs=n_jobs) \
             (delayed(self.generate_patches_from_image) \
             (path) for path in tqdm(self.imgs_path, total=len(self.imgs_path)))
@@ -39,97 +52,128 @@ class PatchGenerator():
     
     def _save_patch(self, img_patch, patch_type, patch_num, path):
         
-        save_path = self._create_save_path(path)
-        cv2.imwrite(f'{save_path}/patch_{patch_num}_{patch_type}.jpg', img_patch)   
+        if img_patch is not None:
+            save_path = self._create_save_path(path)
+            cv2.imwrite(f'{save_path}/patch_{patch_num}_{patch_type}.png', img_patch)   
     
     def generate_patches_from_image(self, path):
          
+        min_ratio = self.min_ratio
+        
         for i in range(self.max_patches//2):
-            img_patch = self._create_background_patch(path)  
-            self._save_patch(img_patch, "BACKGROUND", i, path)
+            self._create_background_patch(path, i)  
          
         for i in range(self.max_patches):
-            img_patch, patch_type = self._create_mass_patch(path)  
-            self._save_patch(img_patch, patch_type, i, path)
+            min_ratio = self._create_mass_patch(path, min_ratio, i)
     
-    def _create_background_patch(self, path: str):
+    def _create_background_patch(self, path: str, patch_num: int)->None:
         
         ratio = 1
         black_space = 1
         patch_size = self.patch_size
         max_black_space = self.max_black_space
         
+        # Conditions to terminate loop
         trials = 0
         while (black_space > max_black_space) or (ratio > 0):
             
             if trials >= self.max_trials:
                 max_black_space *= 1.5
+                if max_black_space >= 1.0:
+                    return None
             
             img = cv2.imread(path,0)
-            mask = cv2.imread(path.replace("_mammo.jpg", "_mask.png"),0)
+            mask = cv2.imread(path.replace("_mammo.png", "_mask.png"),0)
 
+            # Get random x and y coordinates
             x = np.random.randint(0, img.shape[1] - patch_size[1])
             y = np.random.randint(0, img.shape[0] - patch_size[0])
 
+            # Create a patch with the specified patch size
             patch_mask = mask[y:y + patch_size[0], x:x + patch_size[1]]
             patch_img = img[y:y + patch_size[0], x:x + patch_size[1]]
             
+            # Calculate black space ratio and abnormality ratio in image
             black_space = (patch_img==0).mean()
             ratio = (patch_mask!=0).mean()
             trials += 1
-            
-        #return (patch_img, patch_mask, black_space, ratio)
         
-        return patch_img
+        self._save_patch(patch_img, "BACKGROUND", patch_num, path)
     
-    def _create_mass_patch(self, path: str):
-        
+    def _create_mass_patch(self, path: str, min_ratio: float, patch_num: int):
+        """Generate a patch of mammography image with an abnormality (mass).
+
+        Args:
+            path (str): path to the mammography image
+            min_ratio (float): minimum ratio of the patch that should be covered by abnormality mask
+            patch_num (int): index of the patch to be generated
+
+        Returns:
+            min_ratio (float): updated minimum ratio to be used in the next call
+        """
         ratio = 0
         patch_size = self.patch_size
         max_black_space = self.max_black_space
-        min_ratio = self.min_ratio
         
         trials = 0
         while (ratio < min_ratio) or (black_space > max_black_space):
             
+            # If the maximum trials have been reached without finding a patch with sufficient abnormality
             if trials >= self.max_trials:
-                min_ratio *= 0.5
+                # Reduce the minimum ratio to find an abnormality patch
+                min_ratio *= 0.25
+                print(f"Reducing min ratio to {min_ratio}", flush=True)
+                # If the minimum ratio is below the threshold, return None
+                if min_ratio <= 0.1:
+                    print(f"No abnormality patch can be generated for image: {path}")
+                    return None
+                # Reset the trial count
+                trials = 0
+                
+            # Load the abnormality mask
+            mask = cv2.imread(path.replace("_mammo.png", "_mask.png"),0)
             
-            mask = cv2.imread(path.replace("_mammo.jpg", "_mask.png"),0)
-            
+            # Get the coordinates of the regions with abnormality
             roi_coords = np.where(mask!=0)
-            expand = int((1-self.min_ratio) * patch_size[0])
+            # Expand the region of interest
+            expand = int((1+self.min_ratio) * patch_size[0])
             
+            # Limit the region of interest to the bounds of the image
             ymin, xmin = np.clip(np.min(roi_coords, axis=1) - expand, 0, None)
             ymax, xmax = np.clip(np.max(roi_coords, axis=1) + expand, None, [mask.shape[0], mask.shape[1]])
             roi_mask = mask[ymin:ymax, xmin:xmax]
-            
-            #return roi_mask
 
+            # Generate random x, y coordinates within the region of interest
             x = np.random.randint(0, roi_mask.shape[1] - patch_size[1])
             y = np.random.randint(0, roi_mask.shape[0] - patch_size[0])
 
+            # Extract the patch of the abnormality mask
             patch_mask = roi_mask[y:y + patch_size[0], x:x + patch_size[1]]
+             # Calculate the ratio of the abnormality within the patch
             ratio = (patch_mask!=0).mean()
             
+            # Load the mammography image
             img = cv2.imread(path,0)[ymin:ymax, xmin:xmax]
+            # Extract the patch of the mammography image
             patch_img = img[y:y + patch_size[0], x:x + patch_size[1]]
+            # Calculates black space in iamge
             black_space = (patch_img==0).mean()
             trials += 1
         
         patch_type = self._determine_mass_type(patch_mask)
         
-        #return(patch_img, patch_mask, ratio, roi_mask)
-        
-        return patch_img, patch_type
+        self._save_patch(img_patch, patch_type, patch_num, path)
+        return min_ratio
     
     def _determine_mass_type(self, patch_mask):
         
+        # Benign leasions are code with 1, malignant with 2 in the mask
         mass_only = patch_mask[patch_mask!=0]
         return "BENIGN" if (mass_only==1).mean() > 0.5 else "MALIGNANT"
     
     def _create_save_path(self, path: str):
         
+        # Creates a folder to save the image
         patient_dir =  path.split(os.path.sep)[-2]
         save_path = f"{self.save_path}/{patient_dir}"
         os.makedirs(save_path, exist_ok=True)
