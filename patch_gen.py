@@ -65,6 +65,9 @@ class PatchGenerator():
          
         for i in range(self.max_patches):
             min_ratio = self._create_mass_patch(path, min_ratio, i)
+            
+            if min_ratio is None:
+                break
     
     def _create_background_patch(self, path: str, patch_num: int)->None:
         
@@ -79,8 +82,6 @@ class PatchGenerator():
             
             if trials >= self.max_trials:
                 max_black_space *= 1.5
-                if max_black_space >= 1.0:
-                    return None
             
             img = cv2.imread(path,0)
             mask = cv2.imread(path.replace("_mammo.png", "_mask.png"),0)
@@ -121,12 +122,12 @@ class PatchGenerator():
             # If the maximum trials have been reached without finding a patch with sufficient abnormality
             if trials >= self.max_trials:
                 # Reduce the minimum ratio to find an abnormality patch
-                min_ratio *= 0.25
+                min_ratio *= 0.75
                 print(f"Reducing min ratio to {min_ratio}", flush=True)
                 # If the minimum ratio is below the threshold, return None
                 if min_ratio <= 0.1:
                     print(f"No abnormality patch can be generated for image: {path}")
-                    return min_ratio/0.25
+                    return None
                 # Reset the trial count
                 trials = 0
                 
